@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Conn3x
+        env: &gh
+          GH_TOKEN: ${{ github.token }}
+        run: &install |
+          tag=$(gh release view -R conn3xorg/conn3x --json tagName -q .tagName)
+          file="conn3x_${tag#v}_linux_amd64.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "https://github.com/conn3xorg/conn3x/releases/download/$tag/$file"
+          curl -sSfLO "https://github.com/conn3xorg/conn3x/releases/download/$tag/checksums.txt"
+          grep " $file\$" checksums.txt | sha256sum -c -
+          mkdir -p bin && tar -xzf "$file" -C bin conn3x
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: conn3x version
+      - run: conn3x fmt -check -recursive
+      - name: Validate
+        run: conn3x init -backend=false && conn3x validate
+      - name: Validate the example
+        working-directory: examples/local
+        run: conn3x init -backend=false && conn3x validate
+
+  e2e:
+    needs: validate
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [rocky10, fedora45, ubuntu2404, debian13]
+    name: e2e (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The test host images live in the Conn3x repo.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: conn3xorg/conn3x
+          ref: main
+          path: conn3x
+          persist-credentials: false
+          sparse-checkout: test/images
+      - name: Install Conn3x
+        env: *gh
+        run: *install
+      - name: Start the ${{ matrix.distro }} host
+        working-directory: examples/local
+        env:
+          CONTAINERFILE: ${{ github.workspace }}/conn3x/test/images/${{ matrix.distro }}/Containerfile
+        run: ./up.sh
+      - name: Apply, then plan again with no changes
+        working-directory: examples/local
+        env:
+          TF_VAR_admin_password: ci-only-admin-pass-1
+          TF_VAR_client_nonce: ci-only-nonce
+        run: |
+          conn3x init
+          conn3x apply -auto-approve
+          conn3x plan -detailed-exitcode
+      # The admin signs in to the GUI's API and a wrong password is refused.
+      # The client on the same host enrolls and shows up in clients() under
+      # the host's name.
+      - name: Sign in to the GUI and find the client
+        run: &check |
+          podman exec -i -e PW="$PW" circuit-velociraptor sh -eu <<'EOF'
+          gui=https://127.0.0.1:8889/api/v1/GetUserUITraits
+          [ "$(curl -sk -o /dev/null -w '%{http_code}' -u "admin:$PW" $gui)" = 200 ]
+          [ "$(curl -sk -o /dev/null -w '%{http_code}' -u admin:wrong-password-1 $gui)" = 401 ]
+          host=$(cat /proc/sys/kernel/hostname)
+          for _ in $(seq 90); do
+            out=$(velociraptor --api_config /etc/velociraptor/api.config.yaml query --format jsonl "SELECT client_id, os_info.hostname AS host FROM clients()")
+            echo "$out" | grep -q "\"host\":\"$host\"" && exit 0
+            sleep 2
+          done
+          echo "$out"
+          exit 1
+          EOF
+        env:
+          PW: ci-only-admin-pass-1
+      # A new admin_password replaces the old one on the next apply.
+      - name: Change the admin password with a second apply
+        working-directory: examples/local
+        env:
+          TF_VAR_admin_password: ci-only-admin-pass-2
+          TF_VAR_client_nonce: ci-only-nonce
+        run: |
+          conn3x apply -auto-approve
+          conn3x plan -detailed-exitcode
+      - name: Sign in with the new password
+        run: *check
+        env:
+          PW: ci-only-admin-pass-2
+      - name: Check the old password is refused and state holds no secrets
+        working-directory: examples/local
+        run: |
+          [ "$(podman exec circuit-velociraptor curl -sk -o /dev/null -w '%{http_code}' -u admin:ci-only-admin-pass-1 https://127.0.0.1:8889/api/v1/GetUserUITraits)" = 401 ]
+          if grep -qE 'ci-only-|PRIVATE KEY' terraform.tfstate; then exit 1; fi
+      - name: Show the Velociraptor logs
+        if: failure()
+        run: podman exec circuit-velociraptor journalctl -u 'velociraptor*' --no-pager -n 100 || true
+      - name: Clean up
+        if: always()
+        working-directory: examples/local
+        run: ./down.sh
+
+  pair:
+    needs: validate
+    runs-on: ubuntu-24.04
+    name: pair (Ubuntu server, Rocky Linux client)
+    env:
+      PODMAN: sudo podman
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: conn3xorg/conn3x
+          ref: main
+          path: conn3x
+          persist-credentials: false
+          sparse-checkout: test/images
+      - name: Install Conn3x
+        env: *gh
+        run: *install
+      - name: Start an Ubuntu 24.04 server and a Rocky Linux 10 client
+        run: |
+          images=${{ github.workspace }}/conn3x/test/images
+          NAME=velociraptor-server PORT=2292 CONTAINERFILE=$images/ubuntu2404/Containerfile examples/local/up.sh
+          cat examples/local/known_hosts >> test/pair/known_hosts
+          NAME=velociraptor-client PORT=2295 CONTAINERFILE=$images/rocky10/Containerfile examples/local/up.sh
+          cat examples/local/known_hosts >> test/pair/known_hosts
+          cp examples/local/id_ed25519 test/pair/
+          echo "TF_VAR_server_ip=$(sudo podman inspect -f '{{.NetworkSettings.IPAddress}}' velociraptor-server)" >> "$GITHUB_ENV"
+      - name: Apply, then plan again with no changes
+        working-directory: test/pair
+        run: |
+          conn3x init
+          conn3x apply -auto-approve
+          conn3x plan -detailed-exitcode
+      # The client container enrolls with the server across the network.
+      - name: Find the client in the server's client list
+        run: |
+          host=$(sudo podman exec velociraptor-client cat /proc/sys/kernel/hostname)
+          for _ in $(seq 90); do
+            out=$(sudo podman exec velociraptor-server velociraptor --api_config /etc/velociraptor/api.config.yaml query --format jsonl "SELECT client_id, os_info.hostname AS host FROM clients()")
+            echo "$out" | grep -q "\"host\":\"$host\"" && exit 0
+            sleep 2
+          done
+          echo "$out"
+          exit 1
+      - name: Show the Velociraptor logs
+        if: failure()
+        run: for n in server client; do sudo podman exec velociraptor-$n journalctl -u 'velociraptor*' --no-pager -n 100 || true; done
+      - name: Clean up
+        if: always()
+        run: for n in server client; do NAME=velociraptor-$n examples/local/down.sh; done
