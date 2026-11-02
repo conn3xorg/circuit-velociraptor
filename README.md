@@ -1,5 +1,7 @@
 # circuit-velociraptor
 
+[![Conn3x grade](https://conn3x.org/circuits/velociraptor/grade.svg)](https://conn3x.org/circuits/velociraptor/grade)
+
 A Conn3x circuit that runs [Velociraptor](https://github.com/Velocidex/velociraptor), the open-source endpoint visibility and DFIR tool from Rapid7's Velocidex team. One host runs the server and its GUI. Every other host runs the client as a systemd service, which connects back, enrolls, and waits for questions. Then, when something looks wrong at 2am, you ask all of them at once — which processes are listening, who logged in, what changed in `/etc` — instead of SSHing into each box with a notepad.
 
 The circuit downloads a pinned release binary from GitHub, checks its SHA-256, and installs it on both roles. On the server it generates the config on the first apply, so the CA's private key and the server's keys are made on that host and never leave it. It then derives the client config there, hands it to the clients, and creates an admin user for the GUI from a password that stays out of the plan and state.
