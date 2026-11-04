@@ -142,9 +142,9 @@ jobs:
       - name: Start an Ubuntu 24.04 server and a Rocky Linux 10 client
         run: |
           images=${{ github.workspace }}/conn3x/test/images
-          NAME=velociraptor-server PORT=2292 CONTAINERFILE=$images/ubuntu2404/Containerfile examples/local/up.sh
+          CONTAINER_NAME=velociraptor-server PORT=2292 CONTAINERFILE=$images/ubuntu2404/Containerfile examples/local/up.sh
           cat examples/local/known_hosts >> test/pair/known_hosts
-          NAME=velociraptor-client PORT=2295 CONTAINERFILE=$images/rocky10/Containerfile examples/local/up.sh
+          CONTAINER_NAME=velociraptor-client PORT=2295 CONTAINERFILE=$images/rocky10/Containerfile examples/local/up.sh
           cat examples/local/known_hosts >> test/pair/known_hosts
           cp examples/local/id_ed25519 test/pair/
           echo "TF_VAR_server_ip=$(sudo podman inspect -f '{{.NetworkSettings.IPAddress}}' velociraptor-server)" >> "$GITHUB_ENV"
@@ -170,4 +170,4 @@ jobs:
         run: for n in server client; do sudo podman exec velociraptor-$n journalctl -u 'velociraptor*' --no-pager -n 100 || true; done
       - name: Clean up
         if: always()
-        run: for n in server client; do NAME=velociraptor-$n examples/local/down.sh; done
+        run: for n in server client; do CONTAINER_NAME=velociraptor-$n examples/local/down.sh; done
