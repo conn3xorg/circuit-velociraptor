@@ -24,7 +24,7 @@ variable "velociraptor_client_nonce" {
 }
 
 module "velociraptor" {
-  source = "github.com/conn3xorg/circuit-velociraptor?ref=v0.1.0"
+  source = "github.com/conn3xorg/circuit-velociraptor?ref=v0.1.1"
 
   server               = { dfir = "203.0.113.10" }
   clients              = { web1 = "203.0.113.21", web2 = "203.0.113.22", db1 = "203.0.113.30" }
