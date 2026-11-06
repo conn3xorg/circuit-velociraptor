@@ -111,6 +111,53 @@ jobs:
         run: |
           [ "$(podman exec circuit-velociraptor curl -sk -o /dev/null -w '%{http_code}' -u admin:ci-only-admin-pass-1 https://127.0.0.1:8889/api/v1/GetUserUITraits)" = 401 ]
           if grep -qE 'ci-only-|PRIVATE KEY' terraform.tfstate; then exit 1; fi
+      # Restarting the container boots systemd again, so this checks the
+      # server and client come back by themselves and the client re-enrolls.
+      - name: Restart the host, then check the GUI, the client and the plan
+        working-directory: examples/local
+        env:
+          TF_VAR_admin_password: ci-only-admin-pass-2
+          TF_VAR_client_nonce: ci-only-nonce
+        run: |
+          podman restart circuit-velociraptor
+          for _ in $(seq 60); do
+            case $(podman exec circuit-velociraptor systemctl is-system-running 2>/dev/null) in running|degraded) break ;; esac
+            sleep 1
+          done
+          for _ in $(seq 60); do
+            podman exec circuit-velociraptor velociraptor --api_config /etc/velociraptor/api.config.yaml query 'SELECT 1 FROM scope()' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          conn3x plan -detailed-exitcode
+      - name: Sign in after the restart
+        run: *check
+        env:
+          PW: ci-only-admin-pass-2
+      # No Velociraptor release before 0.77.3 ships the linux-amd64.gz this
+      # circuit downloads, so the upgrade is from the last release of the
+      # circuit: a fresh host gets that tag, then this checkout over it, the
+      # way someone moves the ?ref= pin.
+      - name: Upgrade from circuit-velociraptor v0.1.1 on a fresh host, then plan again with no changes
+        working-directory: examples/local
+        env:
+          CONTAINERFILE: ${{ github.workspace }}/conn3x/test/images/${{ matrix.distro }}/Containerfile
+          TF_VAR_admin_password: ci-only-admin-pass-1
+          TF_VAR_client_nonce: ci-only-nonce
+        run: |
+          ./down.sh
+          ./up.sh
+          sed -i 's|source = "../.."|source = "github.com/conn3xorg/circuit-velociraptor?ref=v0.1.1"|' main.tf
+          grep -q 'ref=v0.1.1' main.tf
+          conn3x init
+          conn3x apply -auto-approve
+          git checkout -- main.tf
+          conn3x init
+          conn3x apply -auto-approve
+          conn3x plan -detailed-exitcode
+      - name: Sign in and find the client after the upgrade
+        run: *check
+        env:
+          PW: ci-only-admin-pass-1
       - name: Show the Velociraptor logs
         if: failure()
         run: podman exec circuit-velociraptor journalctl -u 'velociraptor*' --no-pager -n 100 || true
