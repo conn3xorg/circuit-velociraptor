@@ -86,7 +86,8 @@ variable "server_url" {
 }
 
 variable "frontend_address" {
-  type        = string
+  type = string
+  # conn3x-lint:ignore C3X003 endpoints connect to the frontend over the network, and it accepts only clients that hold the deployment's client nonce
   default     = "0.0.0.0"
   description = "Address the server listens on for clients."
 
