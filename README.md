@@ -24,7 +24,7 @@ variable "velociraptor_client_nonce" {
 }
 
 module "velociraptor" {
-  source = "github.com/conn3xorg/circuit-velociraptor?ref=v0.1.3"
+  source = "github.com/conn3xorg/circuit-velociraptor?ref=v0.2.0"
 
   server               = { dfir = "203.0.113.10" }
   clients              = { web1 = "203.0.113.21", web2 = "203.0.113.22", db1 = "203.0.113.30" }
@@ -156,7 +156,7 @@ Before either circuit runs, the `conn3x_host` data source reads each host's arch
 
 ## Requirements
 
-Requires Conn3x v0.6.9 or later and systemd on each host, on x86_64 or aarch64, with GitHub reachable for the download.
+Requires Conn3x v0.28.0 or later and systemd on each host, on x86_64 or aarch64, with GitHub reachable for the download.
 
 ## Tested on
 

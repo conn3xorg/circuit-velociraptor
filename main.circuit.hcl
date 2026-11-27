@@ -236,17 +236,30 @@ circuit "velociraptor_server" {
     }
   }
 
-  # A step rather than a handler, so the checks below talk to the server
-  # that runs the new binary and config. On a first apply it's what starts
-  # the server. The velociraptor commands above run as root and can leave
-  # root's files in the datastore, which the server then can't open.
-  step "restart" {
+  # The velociraptor commands above run as root and can leave root's files
+  # in the datastore, which the server then can't open.
+  step "datastore_owner" {
     command {
-      command = "chown -R velociraptor:velociraptor ${local.home} && systemctl daemon-reload && systemctl restart velociraptor_server"
+      command = "chown -R velociraptor:velociraptor ${local.home}"
       triggers = {
         binary = conn3x_link.velociraptor_server__link[each.key].revision
         config = conn3x_command.velociraptor_server__merge[each.key].revision
         unit   = conn3x_file.velociraptor_server__unit[each.key].revision
+      }
+    }
+  }
+
+  # A step rather than a handler, so the checks below talk to the server
+  # that runs the new binary and config. On a first apply it's what starts
+  # the server. service_action reloads systemd first when the unit changed.
+  step "restart" {
+    service_action {
+      name = "velociraptor_server"
+      triggers = {
+        binary = conn3x_link.velociraptor_server__link[each.key].revision
+        config = conn3x_command.velociraptor_server__merge[each.key].revision
+        unit   = conn3x_file.velociraptor_server__unit[each.key].revision
+        owner  = conn3x_command.velociraptor_server__datastore_owner[each.key].revision
       }
     }
   }
@@ -265,7 +278,7 @@ circuit "velociraptor_server" {
     command {
       command  = "for _ in $(seq 60); do velociraptor --api_config ${local.api} query 'SELECT 1 FROM scope()' >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1"
       unless   = "velociraptor --api_config ${local.api} query 'SELECT 1 FROM scope()' >/dev/null 2>&1"
-      triggers = { restart = conn3x_command.velociraptor_server__restart[each.key].revision }
+      triggers = { restart = conn3x_service_action.velociraptor_server__restart[each.key].revision }
     }
   }
 
